@@ -231,6 +231,8 @@ static Arena* g_arena = nullptr;
 static std::vector<Car*> g_cars;
 static int g_goalScoredFlag = 0;
 static bool g_unlimitedBoost = false;
+// Arena Preset: 0 = Standard Soccar, 1 = Throwback Stadium (SARPBC)
+static int g_arenaPreset = 0;
 static bool g_firstTouchFired = false;
 static bool g_lastBallSleeping = true;
 
@@ -957,8 +959,37 @@ int physics_createArena() {
     // Real-time gameplay requires ball angular velocity & spin simulation (noBallRot = false)
     ArenaConfig arenaConfig;
     arenaConfig.noBallRot = false;
+    if (g_arenaPreset == 1) {
+        // Throwback Stadium (SARPBC): field extends behind goals up to Y=+-6912
+        arenaConfig.minPos = Vec(-5600.f, -7200.f, -100.f);
+        arenaConfig.maxPos = Vec( 5600.f,  7200.f,  2200.f);
+        arenaConfig.disableHardcodedSideWalls = true;
+        arenaConfig.useCustomBoostPads = true;
+        // Populate 34 boost pads (8 big pills including 2 behind goals + 26 key small pads)
+        for (int i = 0; i < RLConst::ThrowbackStadium::LOCS_AMOUNT_BIG; i++) {
+            BoostPadConfig bpc;
+            bpc.pos = RLConst::ThrowbackStadium::LOCS_BIG[i];
+            bpc.isBig = true;
+            arenaConfig.customBoostPads.push_back(bpc);
+        }
+        for (int i = 0; i < RLConst::ThrowbackStadium::LOCS_AMOUNT_SMALL && (int)arenaConfig.customBoostPads.size() < NUM_ARENA_PADS; i++) {
+            BoostPadConfig bpc;
+            bpc.pos = RLConst::ThrowbackStadium::LOCS_SMALL[i];
+            bpc.isBig = false;
+            arenaConfig.customBoostPads.push_back(bpc);
+        }
+    }
     g_arena = Arena::Create(GameMode::SOCCAR, arenaConfig);
     if (!g_arena) return 0;
+    if (g_arenaPreset == 1) {
+        MutatorConfig mc = g_arena->GetMutatorConfig();
+        mc.useThrowbackGoalVolume = true;
+        mc.goalVolumeHalfWidthX = RLConst::ThrowbackStadium::GOAL_VOLUME_HALF_WIDTH_X;
+        mc.goalVolumeMinY = RLConst::ThrowbackStadium::GOAL_VOLUME_MIN_Y;
+        mc.goalVolumeMaxY = RLConst::ThrowbackStadium::GOAL_VOLUME_MAX_Y;
+        mc.goalVolumeMaxZ = RLConst::ThrowbackStadium::GOAL_VOLUME_MAX_Z;
+        g_arena->SetMutatorConfig(mc);
+    }
 
     if (g_arena->_bulletWorldParams.overlappingPairCache) {
         g_arena->_bulletWorldParams.overlappingPairCache->setOverlapFilterCallback(&g_bridgeOverlapFilter);
@@ -1526,6 +1557,7 @@ float* physics_getPadInfoPtr() {
 }
 
 // Helper to resolve standard 6 Rocket League hitbox presets
+// Helper to resolve 7 Rocket League hitbox presets (0..5 standard + 6 Three-Wheeler PSYCLOPS)
 static const CarConfig& getCarConfigForIndex(int hitboxIndex) {
     switch (hitboxIndex) {
         case 1: return CAR_CONFIG_DOMINUS;
@@ -1533,6 +1565,7 @@ static const CarConfig& getCarConfigForIndex(int hitboxIndex) {
         case 3: return CAR_CONFIG_BREAKOUT;
         case 4: return CAR_CONFIG_HYBRID;
         case 5: return CAR_CONFIG_MERC;
+        case 6: return CAR_CONFIG_PSYCLOPS; // Three-wheeler ("三蹦子" / Confidential_ThirdWheel_Test)
         case 0:
         default: return CAR_CONFIG_OCTANE;
     }
@@ -1818,7 +1851,7 @@ int physics_resetKickoffAtSpawn(int spawnIndex, int settleTicks) {
         bool isBlue = (specs[i].team == Team::BLUE);
         int teamSlot = isBlue ? (blueIdx++) : (orangeIdx++);
         int locIdx = (safeSpawnIdx + teamSlot) % CAR_SPAWN_LOCATION_AMOUNT;
-        CarSpawnPos spawnPos = CAR_SPAWN_LOCATIONS_SOCCAR[locIdx];
+        CarSpawnPos spawnPos = (g_arenaPreset == 1) ? RLConst::ThrowbackStadium::CAR_SPAWN_LOCATIONS[locIdx] : CAR_SPAWN_LOCATIONS_SOCCAR[locIdx];
 
         CarState spawnState;
         spawnState.boost = g_arena->_mutatorConfig.carSpawnBoostAmount;
@@ -1997,6 +2030,86 @@ float* physics_getReplayFramePtrByIndex(int frameIndex) {
     size_t byteOffset = sizeof(ReplayHeader) + static_cast<size_t>(targetIdx) * sizeof(GameStateBufferPod);
     if (byteOffset + sizeof(GameStateBufferPod) > REPLAY_STORAGE_BYTES) return nullptr;
     return reinterpret_cast<float*>(g_replayBuffer + byteOffset);
+}
+
+
+// ============================================================================
+// Three-Wheeler ("三蹦子" / Confidential_ThirdWheel_Test) & Throwback Stadium APIs
+// ============================================================================
+
+int physics_setCarThreeWheels(int carIndex, int enabled) {
+    if (!g_arena || carIndex < 0 || carIndex >= static_cast<int>(g_cars.size())) return 0;
+    Car* oldCar = g_cars[carIndex];
+    if (!oldCar) return 0;
+
+    CarState state = oldCar->GetState();
+    Team team = oldCar->team;
+    CarConfig cfg = oldCar->config;
+
+    if (enabled != 0) {
+        cfg.threeWheels = true;
+        cfg.frontWheels.connectionPointOffset.y = 5.0f;
+        cfg.frontWheels.suspensionRestLength = 33.0f;
+        cfg.backWheels.suspensionRestLength = 31.3f;
+    } else {
+        cfg.threeWheels = false;
+        if (cfg.frontWheels.connectionPointOffset.y < 10.0f) {
+            cfg.frontWheels.connectionPointOffset.y = 25.9f;
+            cfg.frontWheels.suspensionRestLength = 38.83f;
+            cfg.backWheels.suspensionRestLength = 36.955f;
+        }
+    }
+
+    g_arena->RemoveCar(oldCar);
+    Car* newCar = g_arena->AddCar(team, cfg);
+    if (!newCar) return 0;
+
+    newCar->SetState(state);
+    if (g_carOverrides[carIndex].active) {
+        newCar->_rigidBody.setLinearFactor(g_carOverrides[carIndex].linearFactor);
+        newCar->_rigidBody.setGravity(g_arena->_mutatorConfig.gravity * UU_TO_BT * g_carOverrides[carIndex].gravityScale);
+    }
+    g_arena->_bulletWorld.updateSingleAabb(&newCar->_rigidBody);
+    g_cars[carIndex] = newCar;
+    syncStateBuffer();
+    return 1;
+}
+
+int physics_getCarThreeWheels(int carIndex) {
+    if (!g_arena || carIndex < 0 || carIndex >= static_cast<int>(g_cars.size()) || !g_cars[carIndex]) return 0;
+    return g_cars[carIndex]->config.threeWheels ? 1 : 0;
+}
+
+void physics_setArenaPreset(int presetIndex) {
+    g_arenaPreset = presetIndex;
+    if (g_arena) {
+        MutatorConfig mc = g_arena->GetMutatorConfig();
+        if (presetIndex == 1) {
+            mc.useThrowbackGoalVolume = true;
+            mc.goalVolumeHalfWidthX = RLConst::ThrowbackStadium::GOAL_VOLUME_HALF_WIDTH_X;
+            mc.goalVolumeMinY = RLConst::ThrowbackStadium::GOAL_VOLUME_MIN_Y;
+            mc.goalVolumeMaxY = RLConst::ThrowbackStadium::GOAL_VOLUME_MAX_Y;
+            mc.goalVolumeMaxZ = RLConst::ThrowbackStadium::GOAL_VOLUME_MAX_Z;
+        } else {
+            mc.useThrowbackGoalVolume = false;
+        }
+        g_arena->SetMutatorConfig(mc);
+    }
+}
+
+int physics_getArenaPreset() {
+    return g_arenaPreset;
+}
+
+void physics_setGoalVolumeBox(int enabled, float halfWidthX, float minY, float maxY, float maxZ) {
+    if (!g_arena) return;
+    MutatorConfig mc = g_arena->GetMutatorConfig();
+    mc.useThrowbackGoalVolume = (enabled != 0);
+    if (halfWidthX > 0.0f) mc.goalVolumeHalfWidthX = halfWidthX;
+    if (minY > 0.0f) mc.goalVolumeMinY = minY;
+    if (maxY > 0.0f) mc.goalVolumeMaxY = maxY;
+    if (maxZ > 0.0f) mc.goalVolumeMaxZ = maxZ;
+    g_arena->SetMutatorConfig(mc);
 }
 
 } // extern "C" 

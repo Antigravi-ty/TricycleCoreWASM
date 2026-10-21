@@ -65,3 +65,35 @@ You can also contact me on Discord if you have questions, my username is `zealan
 ## Legal Notice
 RocketSim was written to replicate Rocket League's game logic, but does not actually contain any code from the game.
 To Epic Games/Psyonix: If any of you guys have an issue with this, let me know on Discord and we can resolve it.
+
+
+---
+
+# TricycleCoreWASM (Three-Wheeler & Throwback Stadium Extensions)
+
+This repository contains the modified RocketSim C++ & Emscripten WASM bridge (`ReWASM_EDIT` base) supporting:
+
+1. **Three-Wheeler Mode ("三蹦子" / `CAR_CONFIG_PSYCLOPS` / `Body_Topple` / `Confidential_ThirdWheel_Test`)**
+2. **Throwback Stadium (`ThrowbackStadium_P.upk` non-standard arena with standalone goals, 44 boost pads, and open back-of-goal area)**
+
+## 1. Three-Wheeler Mode (`CAR_CONFIG_PSYCLOPS`) Changes
+- **`wasm/RocketSimBridge.cpp`**:
+  - Added `case 6: return CAR_CONFIG_PSYCLOPS;` to `getCarConfigForIndex(int hitboxIndex)` so `HITBOX_PRESETS.PSYCLOPS = 6` in JavaScript selects the native 3-wheeled Octane/Topple configuration (`threeWheels = true`, front axle narrowed to `Y = ±5.0 uu`, front rest length `33.0 uu`, back rest length `31.3 uu`, `STEER_ANGLE_FROM_SPEED_CURVE_THREEWHEEL`, `LAT_FRICTION_CURVE_THREEWHEEL`, and `stickyForceScale = 0`).
+  - Added C-ABI exports `_physics_setCarThreeWheels(int carId, int enabled)` and `_physics_getCarThreeWheels(int carId)` to toggle `threeWheels` on any car at runtime.
+- **`wasm/compile.py`**:
+  - Added `_physics_setCarThreeWheels`, `_physics_getCarThreeWheels`, `_physics_setArenaPreset`, `_physics_getArenaPreset`, and `_physics_setGoalVolumeBox` to `EXPORTED_FUNCTIONS`.
+
+## 2. Throwback Stadium (`ThrowbackStadium_P.upk`) Physics Changes
+- **`src/RLConst.h` (`namespace ThrowbackStadium`)**:
+  - Added exact coordinates extracted from `ThrowbackStadium_P.upk`:
+    - **GoalVolume 3D AABB (`GoalVolume_TA_0` & `GoalVolume_TA_1`)**: `X ∈ [-960.0, +960.0]`, `|Y| ∈ [4909.31, 5757.31]`, `Z ∈ [-64.0, +648.0]` (back wall is at `Y = ±6912.0`).
+    - **Boost Pads**: 8 Big Boost Pills (`BOOST_LOCATIONS_AMOUNT_BIG = 8`, including `(0, ±6512, 72)` behind the goals) and 36 Small Boost Pads (`BOOST_LOCATIONS_AMOUNT_SMALL = 36`, including 8 pads behind the goals).
+    - **Kickoff Spawns & Respawns**: 5 kickoff locations (`(±2048, -2560)`, `(±256, -3840)`, `(0, -4608)`) and 4 backline respawn locations (`(±2688, -4608)`, `(±2304, -4608)`).
+- **`src/Sim/MutatorConfig/MutatorConfig.h` & `src/Sim/Arena/Arena.cpp` (`Arena::IsBallScored()`)**:
+  - Added `useThrowbackGoalVolume` and 3D GoalVolume bounding box parameters (`goalVolumeMinX/MaxX`, `goalVolumeMinY/MaxY`, `goalVolumeMinZ/MaxZ`).
+  - When `useThrowbackGoalVolume == true`, `Arena::IsBallScored()` checks whether the ball enters the 3D `GoalVolume_TA` box (`abs(pos.y) >= minY + r && abs(pos.y) <= maxY - r && abs(pos.x) <= maxX - r && pos.z >= minZ && pos.z <= maxZ - r`), allowing the ball and cars to freely pass behind the goal (`|Y| > 5757.31` up to `6912`) without false scoring.
+- **`src/Sim/Arena/ArenaConfig/ArenaConfig.h` & `src/Sim/Arena/Arena.cpp` (`Arena::_SetupArenaCollisionShapes()`)**:
+  - Added `disableHardcodedSideWalls` flag to skip adding the hardcoded `X = ±4096` and `Z = 2048` `btStaticPlaneShape` planes when loading self-contained custom arena `.cmf` collision meshes (such as `ThrowbackStadium`).
+  - Added `useThrowbackBoostPads` and `useThrowbackSpawns` support in `Arena::ResetToRandomKickoff()` and `Arena::RegisterGoalScore()`.
+- **`wasm/RocketSimBridge.cpp`**:
+  - Added `_physics_setArenaPreset(int preset)` (`0` = Standard Soccar, `1` = Throwback Stadium) to be called before `_physics_init(...)`, which automatically configures `disableHardcodedSideWalls`, `useThrowbackBoostPads`, `useThrowbackSpawns`, and `useThrowbackGoalVolume`.

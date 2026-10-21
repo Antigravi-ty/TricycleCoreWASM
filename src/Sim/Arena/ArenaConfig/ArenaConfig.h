@@ -44,6 +44,9 @@ struct ArenaConfig {
 
 	// Use a custom list of boost pads (customBoostPads) instead of the normal one
 	// NOTE: This will disable the boost pad grid and will thus worsen performance
+	// Disable hardcoded X=+-4096 side plane shapes so custom non-standard arena meshes (.cmf) control all boundaries
+	bool disableHardcodedSideWalls = false;
+
 	bool useCustomBoostPads = false;
 	std::vector<BoostPadConfig> customBoostPads = {}; // Custom boost pads to use, if useCustomBoostPads
 
